@@ -58,6 +58,12 @@ button{font:inherit;color:inherit}
 .tc .cv{width:114px;height:114px;border-radius:6px;background:#2c2c32 center/cover;box-shadow:0 8px 18px rgba(0,0,0,.45);display:grid;place-items:center;font-size:30px}
 .tc b{display:block;font-size:13px;font-weight:700;margin-top:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tc span{display:block;font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tc.art .cv{border-radius:50%}
+.ph{display:flex;gap:14px;align-items:center;margin:6px 0 16px}
+.ph .cv{width:96px;height:96px;border-radius:8px;background:#2c2c32 center/cover;flex:none;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.ph .cv.rd{border-radius:50%}
+.ph b{display:block;font-size:20px;font-weight:800;line-height:1.15}
+.ph span{display:block;font-size:12px;color:var(--muted);margin:4px 0 10px}
 .grid .tc{width:auto;background:var(--card)}
 .grid .tc:hover{background:var(--card2)}
 .grid .tc .cv{width:100%;height:auto;aspect-ratio:1}
@@ -140,7 +146,6 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radiu
     </div>
     <nav id="tabs">
       <button data-t="home" class="on"><svg viewBox="0 0 24 24"><path d="M12 3 3 10.2V21h6.5v-6.5h5V21H21V10.2z"/></svg>Главная</button>
-      <button data-t="rec"><svg viewBox="0 0 24 24"><path d="m12 2 3.1 6.6 7 .9-5.2 4.8 1.4 7.1L12 17.9 5.7 21.4l1.4-7.1L1.9 9.5l7-.9z"/></svg>Рекомендации</button>
       <button data-t="search"><svg viewBox="0 0 24 24"><path d="M10.5 3a7.5 7.5 0 0 1 5.9 12.1l4.3 4.3-1.4 1.4-4.3-4.3A7.5 7.5 0 1 1 10.5 3zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z"/></svg>Поиск</button>
       <button data-t="lib"><svg viewBox="0 0 24 24"><path d="M3 3h2.5v18H3zm5 0h2.5v18H8zm5.4.6 2.4-.6 4.6 17.4-2.4.6z"/></svg>Медиатека</button>
       <button data-t="set"><svg viewBox="0 0 24 24"><path d="M4 6h9v2H4zm11 0h5v2h-5zM4 16h5v2H4zm7 0h9v2h-9zM13 4h2v6h-2zM9 14h2v6H9z"/></svg>Настройки</button>
@@ -179,11 +184,11 @@ function pcard(img,title,sub,onclick){
 function pgrid(items,card){const g=document.createElement('div');g.className='grid';items.forEach(it=>g.appendChild(card(it)));return g}
 
 /* ---------- Spotify (Web Playback SDK, нужен Premium) ---------- */
-const SP_SCOPES='streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state user-library-read user-library-modify user-read-recently-played user-top-read playlist-read-private playlist-read-collaborative';
+const SP_SCOPES='streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state user-library-read user-library-modify user-read-recently-played user-top-read playlist-read-private playlist-read-collaborative user-follow-read';
 const spCid=()=>String(jget('sp_cid','')||'').trim();
 const spRedirect=()=>APP?'http://127.0.0.1:8888/callback':location.origin+location.pathname;
 const spTok=()=>jget('sp_tok',null);
-let spPlayer=null,spDev='',spReady=null,spSt=null,spCurId='',spHeard=false;
+let ctxMode=false,spPlayer=null,spDev='',spReady=null,spSt=null,spCurId='',spHeard=false;
 const rndHex=n=>{const a=new Uint8Array(n);crypto.getRandomValues(a);return [...a].map(b=>('0'+b.toString(16)).slice(-2)).join('')};
 async function sha256b64(t){const d=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t));return btoa(String.fromCharCode(...new Uint8Array(d))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
 const spProblem=()=>APP?'':location.protocol==='file:'?'Плеер открыт как файл, Spotify так не работает. Запусти в папке с файлом: python -m http.server 8888 --bind 127.0.0.1 и открой http://127.0.0.1:8888/'+(location.pathname.split('/').pop()||'player.html')
@@ -244,16 +249,20 @@ function spState(s){
   if(!s){spSt=null;return}
   const cur=s.track_window&&s.track_window.current_track;
   spSt={pos:s.position,dur:s.duration,paused:s.paused,at:performance.now(),id:cur&&cur.id};
+  if(ctxMode&&cur&&cur.id){            // играет подборка/исполнитель целиком: плашку берём из данных Spotify
+    const t=spT(Object.assign({type:'track'},cur));
+    if(t&&(!Q[0]||Q[0].id!==t.id)){Q=[t];qi=0;spCurId=cur.id;show(t)}
+  }
   if(cur&&cur.id===spCurId&&!s.paused&&s.position>0)spHeard=true;
   playing=!s.paused;sync();
   const prevIds=((s.track_window&&s.track_window.previous_tracks)||[]).map(x=>x.id);
-  if(spHeard&&s.paused&&s.position===0&&prevIds.includes(spCurId)){spHeard=false;next(true)}
+  if(!ctxMode&&spHeard&&s.paused&&s.position===0&&prevIds.includes(spCurId)){spHeard=false;next(true)}
 }
 const spPos=()=>{if(!spSt)return 0;const p=spSt.paused?spSt.pos:spSt.pos+(performance.now()-spSt.at);return Math.min(p,spSt.dur||p)};
 const curDur=()=>spSt?spSt.dur/1000:0;
 const curPos=()=>spPos()/1000;
 async function spLoad(t,tok){
-  spHeard=false;spCurId=String(t.uri).split(':')[2];spSt=null;
+  ctxMode=false;spHeard=false;spCurId=String(t.uri).split(':')[2];spSt=null;
   try{
     const dev=await spInit();
     if(tok!==loadTok)return;
@@ -274,17 +283,53 @@ const spImg=(arr,i)=>{arr=arr||[];return (arr[i]||arr[arr.length-1]||{}).url||''
 const spT=t=>{if(!t||!t.uri||t.type==='episode'||t.is_playable===false)return null;const al=t.album||{};
   return{id:'sp'+t.id,uri:t.uri,title:t.name,artist:(t.artists||[]).map(a=>a.name).join(', '),art:spImg(al.images,1),big:spImg(al.images,0),dur:t.duration_ms||0,src:'',sp:1,note:' · Spotify'}};
 const spTs=a=>(a||[]).map(spT).filter(Boolean);
-const spPlCard=p=>pcard(spImg(p.images,0),p.name,(p.owner&&p.owner.display_name)||'',()=>openSpPlaylist(p.id,p.name));
-const spAlbumCard=a=>pcard(spImg(a.images,0),a.name,(a.artists||[]).map(x=>x.name).join(', '),()=>openSpAlbum(a));
-async function openSpPlaylist(id,name){
+const clean=a=>(a||[]).filter(x=>x&&x.id);
+const yr=a=>String(a.release_date||'').slice(0,4);
+const rdate=a=>(String(a.release_date||'')+'-01-01').slice(0,10);
+const memo=(()=>{const m=new Map();return(key,fn,ttl=300000)=>{const h=m.get(key);if(h&&Date.now()-h.t<ttl)return h.p;const p=fn();m.set(key,{t:Date.now(),p});p.catch(()=>m.delete(key));return p}})();
+const myPlaylists=()=>memo('myplaylists',()=>spApi('/me/playlists?limit=40').then(d=>clean(d.items)));
+const spPlCard=p=>pcard(spImg(p.images,0),p.name,(p.owner&&p.owner.display_name)||'Плейлист',()=>openSpPlaylist(p));
+const spAlbumCard=a=>pcard(spImg(a.images,0),a.name,(a.artists||[]).map(x=>x.name).join(', ')+(yr(a)?' · '+yr(a):''),()=>openSpAlbum(a));
+const spArtistCard=a=>{const b=pcard(spImg(a.images,1),a.name,'Исполнитель',()=>openSpArtist(a));b.classList.add('art');return b};
+
+/* запуск «контекста» целиком: плейлист Spotify, исполнитель... (Spotify сам ведёт очередь) */
+async function spPlayCtx(uri,name){
+  if(spPlayer){try{spPlayer.activateElement()}catch(_){}}
+  loadTok++;ctxMode=true;Q=[];qi=-1;spHeard=false;errs=0;
+  try{
+    const dev=await spInit();
+    const go=()=>spApi('/me/player/play?device_id='+enc(dev),{method:'PUT',body:{context_uri:uri}});
+    try{await go()}catch(e){
+      if(e.status!==404)throw e;
+      await spApi('/me/player',{method:'PUT',body:{device_ids:[dev],play:false}});
+      await new Promise(r=>setTimeout(r,700));await go();
+    }
+    toast('Играет: '+name);
+  }catch(e){ctxMode=false;toast(e.status===403?'Spotify: не удалось запустить (нужен Premium)':'Spotify: не удалось запустить')}
+}
+async function openSpPlaylist(p){
   body.innerHTML=msg('Загрузка…');
-  try{const d=await spApi('/playlists/'+id+'/items?limit=50');openList(name||'Плейлист',spTs((d.items||[]).map(x=>x&&(x.item||x.track||x))),{sp:1})}
-  catch(e){body.innerHTML=msg('Не удалось открыть плейлист.<br>Spotify отдаёт содержимое только твоих собственных плейлистов.')}
+  let list=[];
+  try{const d=await spApi('/playlists/'+p.id+'/items?limit=50');list=spTs((d.items||[]).map(x=>x&&(x.item||x.track||x)))}catch(e){}
+  if(list.length)return openList(p.name,list,{sp:1});
+  setTab(tab);spPlayCtx('spotify:playlist:'+p.id,p.name);   // состав чужих плейлистов Spotify не отдаёт — играем целиком
 }
 async function openSpAlbum(a){
   body.innerHTML=msg('Загрузка…');
   try{const d=await spApi('/albums/'+a.id+'/tracks?limit=50');openList(a.name,spTs((d.items||[]).map(t=>Object.assign({},t,{album:a}))),{sp:1})}
   catch(e){body.innerHTML=msg('Не удалось открыть альбом.')}
+}
+async function openSpArtist(a){
+  sub={};
+  body.innerHTML='<div class="h"><button class="pill g" id="bk">← Назад</button></div>';
+  $('#bk').onclick=()=>setTab(tab);
+  const ph=document.createElement('div');ph.className='ph';
+  ph.innerHTML=`<div class="cv rd" style="background-image:url('${url(spImg(a.images,0))}')"></div><div><b>${esc(a.name)}</b><span>Исполнитель</span><button class="pill" id="pa">Слушать</button></div>`;
+  body.appendChild(ph);$('#pa').onclick=()=>spPlayCtx('spotify:artist:'+a.id,a.name);
+  const sec=secEl('Альбомы и синглы');body.appendChild(sec.s);
+  await runSec(sec,()=>memo('alb:'+a.id,()=>spApi('/artists/'+a.id+'/albums?include_groups=album,single&limit=30')).then(d=>{
+    const seen=new Set();return clean(d.items).filter(x=>{const k=x.name.toLowerCase();return !seen.has(k)&&seen.add(k)});
+  }),arr=>sec.box.appendChild(pgrid(arr,spAlbumCard)));
 }
 function spNeed(){
   body.innerHTML=msg('Spotify не подключён.<br>Открой Настройки, вставь Client ID и нажми «Войти через Spotify».')+'<div style="text-align:center"><button class="pill" id="gs">Открыть настройки</button></div>';
@@ -307,9 +352,13 @@ async function spTracks(q,n){
 }
 async function openSpLiked(){
   body.innerHTML=msg('Загрузка…');
-  try{openList('Любимые треки',spTs(((await spApi('/me/tracks?limit=50')).items||[]).map(x=>x.track)),{sp:1})}
-  catch(e){body.innerHTML=msg('Не удалось загрузить.')}
+  try{
+    const pages=await Promise.all([0,50,100].map(o=>spApi('/me/tracks?limit=50&offset='+o).catch(()=>({items:[]}))));
+    openList('Любимые треки',spTs([].concat(...pages.map(d=>(d.items||[]).map(x=>x.track)))),{sp:1});
+  }catch(e){body.innerHTML=msg('Не удалось загрузить.')}
 }
+
+/* ---------- главная: лента на основе твоей музыки ---------- */
 async function homeSp(){
   if(!spTok())return spNeed();
   const hr=new Date().getHours(),gr=hr<5?'Доброй ночи':hr<12?'Доброе утро':hr<18?'Добрый день':'Добрый вечер';
@@ -318,60 +367,59 @@ async function homeSp(){
   const quick=(img,bg,txt,fn)=>{const b=document.createElement('button');b.className='qb';
     b.innerHTML=`<div class="cv" style="${img?`background-image:url('${url(img)}')`:'background:'+bg}">${img?'':'♥'}</div><b>${esc(txt)}</b>`;b.onclick=fn;qt.appendChild(b)};
   quick('','linear-gradient(135deg,#450af5,#c4efd9)','Любимые треки',openSpLiked);
-  quick('','linear-gradient(135deg,#087a3c,#1ed760)','Избранное',()=>openList('Избранное',favs));
-  const rec=secEl('Недавно слушал',true),top=secEl('Часто слушаю',true),pls=secEl('Мои плейлисты');
-  [rec,top,pls].forEach(x=>lst.appendChild(x.s));
+  myPlaylists().then(a=>a.slice(0,5).forEach(p=>quick(spImg(p.images,1),'',p.name,()=>openSpPlaylist(p)))).catch(()=>{});
+  const rec=secEl('Недавно слушал',true,{empty:'Пока пусто: послушай что-нибудь, и треки появятся здесь.'});
+  const mixes=secEl('Подборки для тебя',false,{hide:true});
+  const rel=secEl('Новые релизы твоих исполнителей',false,{hide:true});
+  const art=secEl('Твои исполнители',false,{hide:true});
+  const top=secEl('Часто слушаю',true,{hide:true});
+  const charts=secEl('Чарты Spotify',false,{hide:true});
+  const pls=secEl('Мои плейлисты',false,{hide:true});
+  [rec,mixes,rel,art,top,charts,pls].forEach(x=>lst.appendChild(x.s));
+  const taP=memo('topartists',()=>spApi('/me/top/artists?limit=20&time_range=medium_term').then(d=>clean(d.items)));
   await Promise.all([
-    runSec(rec,async()=>{const seen=new Set();return spTs(((await spApi('/me/player/recently-played?limit=50')).items||[]).map(x=>x.track)).filter(t=>!seen.has(t.id)&&seen.add(t.id))},l=>hookSec(rec,l,true)),
-    runSec(top,async()=>spTs((await spApi('/me/top/tracks?limit=30&time_range=medium_term')).items),l=>hookSec(top,l,false)),
-    runSec(pls,async()=>{const a=(await spApi('/me/playlists?limit=24')).items||[];
-      a.slice(0,4).forEach(p=>quick(spImg(p.images,0),'',p.name,()=>openSpPlaylist(p.id,p.name)));return a},arr=>pls.box.appendChild(shelf(arr,spPlCard)))
+    runSec(rec,()=>memo('recent',async()=>{const seen=new Set();
+      return spTs(((await spApi('/me/player/recently-played?limit=50')).items||[]).map(x=>x.track)).filter(t=>!seen.has(t.id)&&seen.add(t.id))}),l=>hookSec(rec,l,true)),
+    runSec(mixes,()=>memo('mixes',async()=>{
+      const [pl,ta]=await Promise.all([myPlaylists().catch(()=>[]),taP.catch(()=>[])]);
+      const own=pl.filter(p=>p.owner&&p.owner.id==='spotify');           // Daily Mix, Discover Weekly и т.п., если они у тебя в медиатеке
+      const cnt={};ta.forEach(a=>(a.genres||[]).forEach(g=>{cnt[g]=(cnt[g]||0)+1}));
+      const gs=Object.keys(cnt).sort((p,q)=>cnt[q]-cnt[p]).slice(0,3);      // твои любимые жанры
+      const rs=await Promise.allSettled(gs.map(g=>spApi('/search?type=playlist&limit=10&q='+enc(g))));
+      const found=[];rs.forEach(r=>{if(r.status==='fulfilled')clean(r.value.playlists&&r.value.playlists.items).filter(p=>p.owner&&p.owner.id==='spotify').slice(0,3).forEach(p=>found.push(p))});
+      const seen=new Set();return [...own,...found].filter(p=>!seen.has(p.id)&&seen.add(p.id));
+    }),arr=>mixes.box.appendChild(shelf(arr,spPlCard))),
+    runSec(rel,()=>memo('releases',async()=>{
+      const a=(await taP).slice(0,6);
+      const rs=await Promise.allSettled(a.map(x=>spApi('/artists/'+x.id+'/albums?include_groups=album,single&limit=3')));
+      const seen=new Set(),all=[];
+      rs.forEach(r=>{if(r.status==='fulfilled')clean(r.value.items).forEach(al=>{const k=al.name.toLowerCase();if(!seen.has(k)){seen.add(k);all.push(al)}})});
+      return all.sort((p,q)=>rdate(q).localeCompare(rdate(p))).slice(0,16);
+    }),arr=>rel.box.appendChild(shelf(arr,spAlbumCard))),
+    runSec(art,()=>taP.then(a=>a.slice(0,15)),arr=>art.box.appendChild(shelf(arr,spArtistCard))),
+    runSec(top,()=>memo('toptracks',()=>spApi('/me/top/tracks?limit=30&time_range=medium_term').then(d=>spTs(d.items))),l=>hookSec(top,l,false)),
+    runSec(charts,()=>memo('charts',async()=>{
+      const qs=['Top 50 Russia','Top 50 Ukraine','Top 50 Global','Today’s Top Hits'];
+      const rs=await Promise.allSettled(qs.map(q=>spApi('/search?type=playlist&limit=5&q='+enc(q))));
+      const out=[],seen=new Set();
+      rs.forEach(r=>{if(r.status==='fulfilled'){const p=clean(r.value.playlists&&r.value.playlists.items).find(p=>p.owner&&p.owner.id==='spotify');if(p&&!seen.has(p.id)){seen.add(p.id);out.push(p)}}});
+      return out;
+    }),arr=>charts.box.appendChild(shelf(arr,spPlCard))),
+    runSec(pls,()=>myPlaylists(),arr=>pls.box.appendChild(shelf(arr,spPlCard)))
   ]);
 }
 
-/* ---------- Рекомендации по языку ---------- */
-const LANGS=[
- {id:'ru',n:'Русский',k:'русский',s:[['Русский рэп','russian hip hop','русский рэп'],['Русский поп','russian pop','русский поп'],['Русский рок','russian rock','русский рок'],['Инди и альтернатива','russian indie','русская инди'],['Шансон','russian chanson','шансон']]},
- {id:'uk',n:'Українська',k:'українська',s:[['Українська поп','ukrainian pop','українська поп'],['Український хіп-хоп','ukrainian hip hop','український реп'],['Український рок','ukrainian rock','український рок'],['Українська інді','ukrainian indie','українська інді']]},
- {id:'en',n:'English',k:'english',s:[['Pop','pop','pop hits'],['Hip-hop','hip hop','hip hop'],['Rock','rock','rock hits'],['Indie','indie','indie'],['R&B','r&b','r&b']]},
- {id:'es',n:'Español',k:'latino',s:[['Latin pop','latin pop','pop latino'],['Reggaeton','reggaeton','reggaeton'],['Trap latino','trap latino','trap latino']]},
- {id:'ko',n:'한국어',k:'k-pop',s:[['K-pop','k-pop','k-pop'],['K-hip hop','k-rap','korean hip hop']]},
- {id:'ja',n:'日本語',k:'j-pop',s:[['J-pop','j-pop','j-pop'],['Аниме','anime','anime']]},
- {id:'de',n:'Deutsch',k:'deutsch',s:[['Deutschpop','german pop','deutschpop'],['Deutschrap','german hip hop','deutschrap']]},
- {id:'fr',n:'Français',k:'français',s:[['Pop française','french pop','chanson française pop'],['Rap français','french hip hop','rap français']]},
- {id:'tr',n:'Türkçe',k:'türkçe',s:[['Türkçe pop','turkish pop','türkçe pop'],['Türkçe rap','turkish hip hop','türkçe rap']]}
-];
-const recCache={};
-let recTok=0;
-function recSp(){
-  if(!spTok())return spNeed();
-  let cur=jget('lang','ru');if(!LANGS.some(l=>l.id===cur))cur='ru';
-  body.innerHTML='<div class="gr">Рекомендации</div><div class="chips" id="lg"></div><div id="rc"></div>';
-  const lg=$('#lg'),rc=$('#rc');
-  const paint=()=>{lg.innerHTML='';LANGS.forEach(l=>{const b=document.createElement('button');b.className='chip'+(l.id===cur?' on':'');b.textContent=l.n;b.onclick=()=>{cur=l.id;jset('lang',cur);paint();loadLang()};lg.appendChild(b)})};
-  const loadLang=()=>{
-    const L=LANGS.find(l=>l.id===cur),tk=++recTok;rc.innerHTML='';
-    const secs=[{t:'Новинки · '+L.n,key:L.id+':new',q:()=>spTracks('genre:"'+L.s[0][1]+'" year:2025-2026',20)}];
-    L.s.forEach(([t,g,k])=>secs.push({t,key:L.id+':'+g,q:async()=>{let l=await spTracks('genre:"'+g+'"',20);if(l.length<6)l=await spTracks(k,20);return l}}));
-    const els=secs.map(x=>{const e=secEl(x.t,true);rc.appendChild(e.s);return e});
-    secs.forEach((x,i)=>runSec(els[i],async()=>{
-      if(!recCache[x.key]){let l=await x.q();if(l.length<4&&i===0)l=await spTracks(L.k+' year:2025-2026',20);recCache[x.key]=l}
-      return recCache[x.key];
-    },l=>{if(tk===recTok)hookSec(els[i],l,false);else els[i].box.innerHTML=''}));
-  };
-  paint();loadLang();
-}
 const BROWSE=[['Русский рэп','#e13300','русский рэп'],['Русский поп','#8d67ab','русский поп'],['Русский рок','#477d95','русский рок'],['Шансон','#7d4b32','шансон'],
   ['Хип-хоп','#ba5d07','hip hop'],['Поп','#148a08','pop'],['Рок','#e91429','rock'],['Электроника','#0d73ec','electronic'],['Инди','#608108','indie'],
-  ['Релакс','#509bf5','chill'],['Тренировка','#777777','workout'],['Для сна','#1e3264','sleep'],['Lo-fi','#8c1932','lofi'],['Українська музика','#dc148c','українська музика']];
+  ['Релакс','#509bf5','chill'],['Тренировка','#777777','workout'],['Для сна','#1e3264','sleep'],['Lo-fi','#8c1932','lofi'],['Танцевальная','#dc148c','dance']];
 function searchSp(){
   if(!spTok())return spNeed();
   body.innerHTML='<div class="gr">Поиск</div><input type="text" id="q" placeholder="Что хочешь послушать?" autocomplete="off"><div class="chips" id="stypes"></div><div id="res"></div>';
   const q=$('#q');q.focus();
-  let type='track';const types=[['Треки','track'],['Альбомы','album']],box=$('#stypes');
+  let type='track';const types=[['Треки','track'],['Исполнители','artist'],['Альбомы','album'],['Плейлисты','playlist']],box=$('#stypes');
   const paint=()=>{box.innerHTML='';types.forEach(([n,k])=>{const b=document.createElement('button');b.className='chip'+(k===type?' on':'');b.textContent=n;b.onclick=()=>{type=k;paint();run()};box.appendChild(b)})};
   const tiles=()=>{const el=$('#res');el.innerHTML='<div class="h">Обзор</div>';const g=document.createElement('div');g.className='grid';
-    BROWSE.forEach(([n,c,k])=>{const b=document.createElement('button');b.className='bt';b.style.background=c;b.textContent=n;b.onclick=()=>{q.value=k;type='track';paint();run()};g.appendChild(b)});el.appendChild(g)};
+    BROWSE.forEach(([n,c,k])=>{const b=document.createElement('button');b.className='bt';b.style.background=c;b.textContent=n;b.onclick=()=>{q.value=k;type='playlist';paint();run()};g.appendChild(b)});el.appendChild(g)};
   const run=async()=>{
     const v=q.value.trim(),el=$('#res');
     if(!v){tiles();return}
@@ -380,12 +428,12 @@ function searchSp(){
       if(type==='track'){
         const list=await spTracks(v,30);
         if(q.value.trim()!==v)return;
-        el.innerHTML='';if(!list.length)el.innerHTML=msg('Ничего не найдено.');else{el.appendChild(rows(list));markCur()}
+        el.innerHTML='';if(!list.length)el.innerHTML=msg('Ничего не найдено.');else{el.appendChild(rows(list))}
       }else{
-        const d=await spApi('/search?type=album&limit=10&q='+enc(v));
+        const d=await spApi('/search?type='+type+'&limit=10&q='+enc(v));
         if(q.value.trim()!==v)return;
-        const arr=(d.albums&&d.albums.items||[]).filter(Boolean);
-        el.innerHTML='';if(!arr.length)el.innerHTML=msg('Ничего не найдено.');else el.appendChild(pgrid(arr,spAlbumCard));
+        const arr=clean(d[type+'s']&&d[type+'s'].items),card=type==='artist'?spArtistCard:type==='album'?spAlbumCard:spPlCard;
+        el.innerHTML='';if(!arr.length)el.innerHTML=msg('Ничего не найдено.');else el.appendChild(pgrid(arr,card));
       }
     }catch(e){el.innerHTML=msg(e.status===401||e.message==='no auth'?'Сессия Spotify истекла — войди заново в Настройках.':'Ошибка поиска. Проверь соединение.')}
   };
@@ -397,13 +445,14 @@ let Q=[],qi=-1,shuffle=false,repeat=0,errs=0,playing=false;
 function show(t){
   $('#title').textContent=t.title;$('#artist').textContent=t.artist;
   const c=$('#cover');c.style.backgroundImage=t.big||t.art?`url('${url(t.big||t.art)}')`:'';$('#coverChibi').style.display=t.big||t.art?'none':'';
-  $('#heart').classList.toggle('on',isFav(t));markCur();
+  $('#heart').classList.toggle('on',isFav(t));syncLikes([t]);markCur();
 }
 function markCur(){const id=Q[qi]&&Q[qi].id;document.querySelectorAll('.row').forEach(r=>r.classList.toggle('cur',r.dataset.id===id))}
 let loadTok=0;
 function load(){const t=Q[qi];if(!t)return;const tok=++loadTok;show(t);return spLoad(t,tok)}
-function playList(l,i){if(spPlayer){try{spPlayer.activateElement()}catch(_){}}Q=l.slice();qi=i;errs=0;load()}
+function playList(l,i){ctxMode=false;if(spPlayer){try{spPlayer.activateElement()}catch(_){}}Q=l.slice();qi=i;errs=0;load()}
 function next(auto){
+  if(ctxMode&&spPlayer){spPlayer.nextTrack();return}
   if(!Q.length)return;
   if(auto&&repeat==2){if(spPlayer){spHeard=false;spPlayer.seek(0).then(()=>spPlayer.resume())}return}
   if(shuffle&&Q.length>1){let n;do n=Math.random()*Q.length|0;while(n==qi);qi=n}
@@ -411,6 +460,7 @@ function next(auto){
   load();
 }
 function prev(){
+  if(ctxMode&&spPlayer){if(spPos()>3000)spPlayer.seek(0);else spPlayer.previousTrack();return}
   if(!Q.length)return;
   if(spPlayer&&spPos()>3000){spPlayer.seek(0);return}
   qi=(qi-1+Q.length)%Q.length;load();
@@ -423,73 +473,109 @@ async function toggle(){
 }
 function sync(){$('#wid').classList.toggle('playing',playing);$('#play').innerHTML=playing?PAUSE:PLAY;if(typeof kick==='function')kick()}
 $('#play').onclick=toggle;$('#next').onclick=()=>next(false);$('#prev').onclick=prev;
-$('#shuf').onclick=e=>{shuffle=!shuffle;e.currentTarget.classList.toggle('on',shuffle)};
-$('#rep').onclick=e=>{repeat=(repeat+1)%3;const b=e.currentTarget;b.classList.toggle('on',repeat>0);b.classList.toggle('one',repeat==2)};
+$('#shuf').onclick=e=>{shuffle=!shuffle;e.currentTarget.classList.toggle('on',shuffle);if(ctxMode)spApi('/me/player/shuffle?state='+shuffle,{method:'PUT'}).catch(()=>{})};
+$('#rep').onclick=e=>{repeat=(repeat+1)%3;const b=e.currentTarget;b.classList.toggle('on',repeat>0);b.classList.toggle('one',repeat==2);if(ctxMode)spApi('/me/player/repeat?state='+['off','context','track'][repeat],{method:'PUT'}).catch(()=>{})};
 let tT;function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(tT);tT=setTimeout(()=>t.classList.remove('show'),2200)}
 const seek=$('#seek');let drag=false;
 const paint=()=>seek.style.setProperty('--p',seek.value/10+'%');
 seek.oninput=()=>{drag=true;paint();$('#tcur').textContent=fmt(seek.value/1000*curDur()*1000)};
 seek.onchange=()=>{const d=curDur();if(d&&spPlayer)spPlayer.seek(seek.value/1000*d*1000);drag=false};
 
-/* ---------- favorites (хранятся в плеере) ---------- */
-let favs=jget('favs',[]).filter(t=>t&&t.sp);
-const isFav=t=>favs.some(f=>f.id===t.id);
-function toggleFav(t){favs=isFav(t)?favs.filter(f=>f.id!==t.id):[...favs,t];jset('favs',favs)}
-$('#heart').onclick=e=>{const t=Q[qi];if(!t)return;toggleFav(t);e.currentTarget.classList.toggle('on',isFav(t));if(tab==='lib'&&!sub)lib()};
-
+/* ---------- лайки = «Любимые треки» в Spotify ---------- */
+const likeMap=new Map();
+const isFav=t=>likeMap.get(t.id)===true;
+function paintHearts(){
+  document.querySelectorAll('.row').forEach(r=>{const b=r.querySelector('.hb');if(b)b.classList.toggle('on',likeMap.get(r.dataset.id)===true)});
+  const t=Q[qi];if(t)$('#heart').classList.toggle('on',isFav(t));
+}
+async function syncLikes(list){
+  const need=list.filter(t=>t&&t.sp&&!likeMap.has(t.id)).map(t=>t.uri).slice(0,80);
+  for(let i=0;i<need.length;i+=40){
+    const part=need.slice(i,i+40);
+    try{const r=await spApi('/me/library/contains?uris='+enc(part.join(',')));part.forEach((u,j)=>likeMap.set('sp'+u.split(':')[2],!!(r&&r[j])))}catch(e){}
+  }
+  paintHearts();
+}
+async function toggleFav(t){
+  const was=isFav(t);likeMap.set(t.id,!was);paintHearts();
+  try{await spApi('/me/library?uris='+enc(t.uri),{method:was?'DELETE':'PUT'});toast(was?'Убрано из любимых':'Добавлено в любимые')}
+  catch(e){likeMap.set(t.id,was);paintHearts();toast('Не получилось. Войди в Spotify заново в Настройках')}
+}
+$('#heart').onclick=()=>{const t=Q[qi];if(t)toggleFav(t)};
 
 /* ---------- views ---------- */
 const body=$('#body');let tab='home',sub=null,homeTracks=[];
 function rows(list){
   const f=document.createElement('div');
   list.forEach((t,i)=>{const r=document.createElement('div');r.className='row';r.dataset.id=t.id;
-    r.innerHTML=`<div class="th" style="background-image:url('${url(t.art)}')"></div><div class="m"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span></div><button class="ib hb ${isFav(t)?'on':''}" aria-label="В избранное">${HEART}</button><span class="d">${t.dur?fmt(t.dur):''}</span>`;
+    r.innerHTML=`<div class="th" style="background-image:url('${url(t.art)}')"></div><div class="m"><b>${esc(t.title)}</b><span>${esc(t.artist)}</span></div><button class="ib hb ${isFav(t)?'on':''}" aria-label="В любимые">${HEART}</button><span class="d">${t.dur?fmt(t.dur):''}</span>`;
     r.onclick=()=>playList(list,i);
-    r.querySelector('.hb').onclick=e=>{e.stopPropagation();toggleFav(t);e.currentTarget.classList.toggle('on',isFav(t));if(Q[qi]&&Q[qi].id===t.id)$('#heart').classList.toggle('on',isFav(t))};
+    r.querySelector('.hb').onclick=e=>{e.stopPropagation();toggleFav(t)};
     f.appendChild(r)});
+  syncLikes(list);markCur();
   return f;
 }
 const msg=t=>`<div class="empty">${t}</div>`;
 const msgEl=t=>{const d=document.createElement('div');d.className='empty';d.innerHTML=t;return d};
-function setTab(t){tab=t;sub=null;document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));({home,rec,search,lib,set:settings})[t]();body.scrollTop=0}
+function setTab(t){tab=t;sub=null;document.querySelectorAll('#tabs button').forEach(b=>b.classList.toggle('on',b.dataset.t===t));({home,search,lib,set:settings})[t]();body.scrollTop=0}
 document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>setTab(b.dataset.t));
 async function loadHome(){homeTracks=spTs(((await spApi('/me/tracks?limit=50')).items||[]).map(x=>x.track))}
-const home=homeSp,search=searchSp,rec=recSp;
-function secEl(title,withPlay){
+const home=homeSp,search=searchSp;
+function secEl(title,withPlay,opts){
   const s=document.createElement('section'),h=document.createElement('div');h.className='h';
   h.innerHTML='<span>'+esc(title)+'</span>';
   let btn=null;
   if(withPlay){btn=document.createElement('button');btn.className='pill';btn.textContent='Слушать всё';btn.style.visibility='hidden';h.appendChild(btn)}
   const box=document.createElement('div');box.className='sec';box.innerHTML=msg('Загрузка…');
-  s.appendChild(h);s.appendChild(box);return{s,box,btn};
+  s.appendChild(h);s.appendChild(box);return Object.assign({s,box,btn},opts||{});
 }
 async function runSec(sec,loader,render){
+  const none=()=>{if(sec.hide)sec.s.remove();else sec.box.innerHTML=msg(sec.empty||'Пока пусто.')};
   try{
     const data=await loader();sec.box.innerHTML='';
-    if(!data||!data.length){sec.box.innerHTML=msg('Пока пусто.');return}
+    if(!data||!data.length){none();return}
     render(data);
-  }catch(e){sec.box.innerHTML=msg('Не загрузилось.')}
+  }catch(e){if(sec.hide)sec.s.remove();else sec.box.innerHTML=msg('Не загрузилось.')}
 }
 let sT;
 function openList(title,list,o={}){
   sub=o;body.innerHTML=`<div class="h"><button class="pill g" id="bk">← Назад</button><span style="flex:1;padding:0 10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(title)}</span><button class="pill" id="pa">Слушать</button></div>`;
-  $('#bk').onclick=lib;$('#pa').onclick=()=>list.length&&playList(list,0);
-  if(!list.length)body.insertAdjacentHTML('beforeend',msg('Здесь пока пусто. Нажми сердечко у трека.'));
-  else{body.appendChild(rows(list));markCur()}
+  $('#bk').onclick=()=>setTab(tab);$('#pa').onclick=()=>list.length&&playList(list,0);
+  if(!list.length)body.insertAdjacentHTML('beforeend',msg('Здесь пока пусто.'));
+  else body.appendChild(rows(list));
 }
 async function lib(){
   sub=null;
-  body.innerHTML='<div class="gr">Моя медиатека</div><div id="ll"></div>';
-  const ll=$('#ll');
-  const row=(img,bg,title,subt,fn)=>{const r=document.createElement('div');r.className='row';
-    r.innerHTML=`<div class="th" style="${img?`background-image:url('${url(img)}')`:'background:'+bg}">${img?'':'♥'}</div><div class="m"><b>${esc(title)}</b><span>${esc(subt)}</span></div>`;r.onclick=fn;ll.appendChild(r)};
-  row('','linear-gradient(135deg,#450af5,#c4efd9)','Любимые треки','Плейлист · Spotify',openSpLiked);
-  row('','linear-gradient(135deg,#087a3c,#1ed760)','Избранное','Плейлист · '+favs.length+' треков',()=>openList('Избранное',favs));
-  if(!spTok()){ll.insertAdjacentHTML('beforeend',msg('Spotify не подключён — зайди в Настройки.'));return}
-  try{
-    const d=await spApi('/me/playlists?limit=40');if(tab!=='lib'||sub)return;
-    (d.items||[]).forEach(p=>row(spImg(p.images,1),'',p.name,'Плейлист · '+((p.owner&&p.owner.display_name)||''),()=>openSpPlaylist(p.id,p.name)));
-  }catch(e){ll.insertAdjacentHTML('beforeend',msg('Плейлисты не загрузились.'))}
+  body.innerHTML='<div class="gr">Моя медиатека</div><div class="chips" id="lc"></div><div id="ll"></div>';
+  const ll=$('#ll'),lc=$('#lc');
+  let kind=jget('libkind','pl');
+  const kinds=[['Плейлисты','pl'],['Исполнители','ar'],['Альбомы','al']];
+  const row=(img,bg,title,subt,fn,round)=>{const r=document.createElement('div');r.className='row';
+    r.innerHTML=`<div class="th" style="${img?`background-image:url('${url(img)}')`:'background:'+bg}${round?';border-radius:50%':''}">${img?'':'♥'}</div><div class="m"><b>${esc(title)}</b><span>${esc(subt)}</span></div>`;r.onclick=fn;ll.appendChild(r)};
+  const paintC=()=>{lc.innerHTML='';kinds.forEach(([n,k])=>{const b=document.createElement('button');b.className='chip'+(k===kind?' on':'');b.textContent=n;b.onclick=()=>{kind=k;jset('libkind',k);paintC();load()};lc.appendChild(b)})};
+  const load=async()=>{
+    ll.innerHTML='';
+    if(!spTok()){ll.innerHTML=msg('Spotify не подключён — зайди в Настройки.');return}
+    ll.innerHTML=msg('Загрузка…');
+    try{
+      if(kind==='pl'){
+        const a=await myPlaylists();if(tab!=='lib'||sub)return;ll.innerHTML='';
+        row('','linear-gradient(135deg,#450af5,#c4efd9)','Любимые треки','Плейлист · Spotify',openSpLiked);
+        a.forEach(p=>row(spImg(p.images,1),'',p.name,'Плейлист · '+((p.owner&&p.owner.display_name)||''),()=>openSpPlaylist(p)));
+      }else if(kind==='ar'){
+        const d=await spApi('/me/following?type=artist&limit=40');if(tab!=='lib'||sub)return;ll.innerHTML='';
+        const a=clean(d.artists&&d.artists.items);
+        if(!a.length)ll.innerHTML=msg('Ты пока ни на кого не подписан.');
+        a.forEach(x=>row(spImg(x.images,1),'',x.name,'Исполнитель',()=>openSpArtist(x),true));
+      }else{
+        const d=await spApi('/me/albums?limit=40');if(tab!=='lib'||sub)return;ll.innerHTML='';
+        const a=clean((d.items||[]).map(x=>x.album));
+        if(!a.length)ll.innerHTML=msg('Сохранённых альбомов пока нет.');
+        a.forEach(x=>row(spImg(x.images,1),'',x.name,'Альбом · '+(x.artists||[]).map(y=>y.name).join(', '),()=>openSpAlbum(x)));
+      }
+    }catch(e){ll.innerHTML=msg(e.status===403?'Нужен повторный вход: Настройки → «Войти заново».':'Не загрузилось.')}
+  };
+  paintC();load();
 }
 function settings(){
   const vol=Math.round(jget('vol',.8)*100);
@@ -501,7 +587,7 @@ function settings(){
   <label>Громкость <span id="vv">${vol}%</span></label><input type="range" id="vol" min="0" max="100" value="${vol}">
   <label>Картинка головы</label><div class="rw"><button class="pill g" id="up">Загрузить свою</button><button class="pill g" id="rs">Вернуть стандартную</button></div>
   ${APP?'<label>Приложение</label><div class="rw"><button class="pill g" id="quit">Закрыть плеер</button></div>':''}
-  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Поиск отдаёт до 30 треков за раз, содержимое открывается только у твоих плейлистов.</p></div>`;
+  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p></div>`;
   if($('#quit'))$('#quit').onclick=()=>inv('quit');
   $('#spc').onchange=e=>jset('sp_cid',e.target.value.trim());
   $('#spl').onclick=()=>{jset('sp_cid',$('#spc').value.trim());spLogin()};
