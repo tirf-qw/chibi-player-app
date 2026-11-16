@@ -1,19 +1,48 @@
 // Без чёрного консольного окна в релизе
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use std::time::{Duration, Instant};
+use tauri::{
+    AppHandle, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
-/// Области (в физических пикселях, от левого верхнего угла окна), где мышь «ловится» плеером.
-/// head — только голова (по ней открывается панель), any — голова + открытая панель.
+/// Размер окна со Spotify (логические пиксели)
+const PANEL_W: f64 = 540.0;
+const PANEL_H: f64 = 720.0;
+
+/// Скрипт внутри Spotify: сообщает голове, играет ли музыка (чтобы она крутилась).
+const INIT_JS: &str = r#"(function(){
+  if (window.top !== window) return;
+  var last = null;
+  setInterval(function(){
+    try {
+      var p = !!(navigator.mediaSession && navigator.mediaSession.playbackState === 'playing');
+      if (p !== last) {
+        last = p;
+        if (window.__TAURI_INTERNALS__) {
+          window.__TAURI_INTERNALS__.invoke('plugin:event|emit', { event: 'sp-playing', payload: p });
+        }
+      }
+    } catch (e) {}
+  }, 1000);
+})();"#;
+
+/// Клик по кнопке «пауза / играть» в самом Spotify
+const TOGGLE_JS: &str = r#"(function(){
+  var b = document.querySelector('[data-testid="control-button-playpause"]');
+  if (b) b.click();
+})();"#;
+
+/// Области (физические пиксели от левого верхнего угла прозрачного окна), которые ловят мышь.
 #[derive(Default)]
 struct Hit {
     head: Mutex<Vec<[f64; 4]>>,
     any: Mutex<Vec<[f64; 4]>>,
+    drag: AtomicBool,
 }
 
 #[tauri::command]
@@ -23,106 +52,167 @@ fn set_rects(state: State<'_, Hit>, head: Vec<[f64; 4]>, any: Vec<[f64; 4]>) {
 }
 
 #[tauri::command]
+fn set_drag(state: State<'_, Hit>, on: bool) {
+    state.drag.store(on, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn toggle_play(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("panel") {
+        let _ = w.eval(TOGGLE_JS);
+    }
+}
+
+#[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
 }
 
-/// Открывает страницу входа Spotify в системном браузере (только accounts.spotify.com).
-#[tauri::command]
-fn open_url(url: String) -> Result<(), String> {
-    if !url.starts_with("https://accounts.spotify.com/") {
-        return Err("blocked".into());
+/// Окно со Spotify создаётся при первом наведении на голову и дальше живёт скрытым (музыка не прерывается).
+fn ensure_panel(app: &AppHandle) -> Option<WebviewWindow> {
+    if let Some(w) = app.get_webview_window("panel") {
+        return Some(w);
     }
-    #[cfg(target_os = "windows")]
-    std::process::Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", &url])
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    #[cfg(target_os = "macos")]
-    std::process::Command::new("open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    #[cfg(target_os = "linux")]
-    std::process::Command::new("xdg-open")
-        .arg(&url)
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+    let url: tauri::Url = "https://open.spotify.com".parse().ok()?;
+    WebviewWindowBuilder::new(app, "panel", WebviewUrl::External(url))
+        .title("Spotify")
+        .inner_size(PANEL_W, PANEL_H)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .visible(false)
+        .focused(false)
+        .initialization_script(INIT_JS)
+        .build()
+        .ok()
 }
 
-/// Крошечный сервер на 127.0.0.1:8888: ловит возврат из Spotify после входа
-/// и передаёт параметры (code=...) в плеер.
-fn serve_callback(app: AppHandle) {
-    let listener = match TcpListener::bind("127.0.0.1:8888") {
-        Ok(l) => l,
-        Err(_) => return,
-    };
-    for stream in listener.incoming() {
-        let Ok(mut s) = stream else { continue };
-        let mut buf = [0u8; 4096];
-        let n = s.read(&mut buf).unwrap_or(0);
-        let req = String::from_utf8_lossy(&buf[..n]).to_string();
-        let line = req.lines().next().unwrap_or("");
-        if let Some(q) = line
-            .split_whitespace()
-            .nth(1)
-            .and_then(|p| p.strip_prefix("/callback?"))
-        {
-            let _ = app.emit("sp-callback", q.to_string());
-        }
-        let body = "<meta charset=utf-8><title>Chibi Player</title><body style=\"font-family:sans-serif;background:#121212;color:#fff;display:grid;place-items:center;height:100vh;margin:0\"><h2>Готово! Можно закрыть вкладку и вернуться в плеер.</h2></body>";
-        let _ = write!(
-            s,
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-            body.len(),
-            body
-        );
-    }
+fn inside(v: &[[f64; 4]], x: f64, y: f64, pad: f64) -> bool {
+    v.iter()
+        .any(|r| x >= r[0] - pad && x <= r[0] + r[2] + pad && y >= r[1] - pad && y <= r[1] + r[3] + pad)
+}
+
+/// Ставит окно Spotify рядом с головой (справа или слева, где хватает места).
+fn place_panel(w: &WebviewWindow, head: [f64; 4], ox: f64, oy: f64, mon: (f64, f64, f64, f64), sf: f64) {
+    let pw = (PANEL_W * sf).min(mon.2 - 16.0);
+    let ph = (PANEL_H * sf).min(mon.3 - 16.0);
+    let hx = head[0] + ox;
+    let hy = head[1] + oy;
+    let right_x = hx + head[2] - 6.0 * sf;
+    let x = if right_x + pw <= mon.0 + mon.2 - 8.0 { right_x } else { hx - pw + 6.0 * sf };
+    let x = x.max(mon.0 + 8.0).min(mon.0 + mon.2 - pw - 8.0);
+    let y = (hy + head[3] / 2.0 - ph / 2.0)
+        .max(mon.1 + 8.0)
+        .min(mon.1 + mon.3 - ph - 8.0);
+    let _ = w.set_size(PhysicalSize::new(pw as u32, ph as u32));
+    let _ = w.set_position(PhysicalPosition::new(x as i32, y as i32));
 }
 
 fn main() {
     tauri::Builder::default()
         .manage(Hit::default())
-        .invoke_handler(tauri::generate_handler![set_rects, quit, open_url])
+        .invoke_handler(tauri::generate_handler![set_rects, set_drag, toggle_play, quit])
         .setup(|app| {
-            let win = app.get_webview_window("main").expect("main window");
+            let overlay = app.get_webview_window("main").expect("main window");
 
-            // Окно на весь основной монитор (на 1 пиксель ниже, чтобы Windows не считал его «полноэкранным»)
-            if let Ok(Some(m)) = win.primary_monitor() {
-                let _ = win.set_position(*m.position());
-                let _ = win.set_size(tauri::PhysicalSize::new(
+            // Прозрачное окно на весь основной монитор (на 1 пиксель ниже, чтобы Windows не считал его «полноэкранным»)
+            let mut mon = (0.0_f64, 0.0_f64, 1920.0_f64, 1080.0_f64);
+            if let Ok(Some(m)) = overlay.primary_monitor() {
+                mon = (
+                    m.position().x as f64,
+                    m.position().y as f64,
+                    m.size().width as f64,
+                    m.size().height as f64,
+                );
+                let _ = overlay.set_position(*m.position());
+                let _ = overlay.set_size(PhysicalSize::new(
                     m.size().width,
                     m.size().height.saturating_sub(1),
                 ));
             }
-            // Пока курсор не над плеером — все клики проходят «сквозь» окно
-            let _ = win.set_ignore_cursor_events(true);
-
-            let h = app.handle().clone();
-            thread::spawn(move || serve_callback(h));
+            // Пока курсор не над головой — все клики проходят «сквозь» окно
+            let _ = overlay.set_ignore_cursor_events(true);
+            let sf = overlay.scale_factor().unwrap_or(1.0);
 
             let h2 = app.handle().clone();
-            let w2 = win.clone();
             thread::spawn(move || {
-                let mut last = (false, false);
+                let mut last_any = false;
+                let mut shown = false;
+                let mut leave: Option<Instant> = None;
                 loop {
                     // редко проверяем, пока курсор далеко; чаще — когда рядом
-                    thread::sleep(Duration::from_millis(if last.1 { 30 } else { 80 }));
-                    let (Ok(c), Ok(p)) = (w2.cursor_position(), w2.outer_position()) else {
+                    thread::sleep(Duration::from_millis(if shown || last_any { 30 } else { 80 }));
+                    let (Ok(c), Ok(p)) = (overlay.cursor_position(), overlay.outer_position()) else {
                         continue;
                     };
-                    let (cx, cy) = (c.x - p.x as f64, c.y - p.y as f64);
+                    let (ox, oy) = (p.x as f64, p.y as f64);
+                    let (rx, ry) = (c.x - ox, c.y - oy);
+
                     let st = h2.state::<Hit>();
-                    let inside = |v: &[[f64; 4]]| {
-                        v.iter()
-                            .any(|r| cx >= r[0] && cx <= r[0] + r[2] && cy >= r[1] && cy <= r[1] + r[3])
+                    let head: Option<[f64; 4]> = st.head.lock().unwrap().first().copied();
+                    let in_any = inside(&st.any.lock().unwrap()[..], rx, ry, 0.0);
+                    let dragging = st.drag.load(Ordering::Relaxed);
+                    let in_head = match head {
+                        Some(r) => inside(&[r], rx, ry, 14.0 * sf),
+                        None => false,
                     };
-                    let cur = (inside(&st.head.lock().unwrap()[..]), inside(&st.any.lock().unwrap()[..]));
-                    if cur != last {
-                        let _ = w2.set_ignore_cursor_events(!cur.1);
-                        let _ = h2.emit("hover", format!("{},{}", cur.0 as u8, cur.1 as u8));
-                        last = cur;
+
+                    if in_any != last_any {
+                        let _ = overlay.set_ignore_cursor_events(!in_any);
+                        last_any = in_any;
+                    }
+
+                    // во время перетаскивания головы Spotify прячем
+                    if dragging {
+                        if shown {
+                            if let Some(w) = h2.get_webview_window("panel") {
+                                let _ = w.hide();
+                            }
+                            shown = false;
+                        }
+                        leave = None;
+                        continue;
+                    }
+
+                    let panel = h2.get_webview_window("panel");
+                    let in_panel = match (&panel, shown) {
+                        (Some(w), true) => match (w.outer_position(), w.outer_size()) {
+                            (Ok(pp), Ok(sz)) => {
+                                c.x >= pp.x as f64
+                                    && c.x <= pp.x as f64 + sz.width as f64
+                                    && c.y >= pp.y as f64
+                                    && c.y <= pp.y as f64 + sz.height as f64
+                            }
+                            _ => false,
+                        },
+                        _ => false,
+                    };
+
+                    if in_head && !shown {
+                        if let (Some(w), Some(hd)) = (ensure_panel(&h2), head) {
+                            place_panel(&w, hd, ox, oy, mon, sf);
+                            let _ = w.show();
+                            shown = true;
+                            leave = None;
+                        }
+                    } else if shown {
+                        if in_head || in_panel {
+                            leave = None;
+                        } else {
+                            match leave {
+                                None => leave = Some(Instant::now()),
+                                Some(t) => {
+                                    if t.elapsed() > Duration::from_millis(450) {
+                                        if let Some(w) = &panel {
+                                            let _ = w.hide();
+                                        }
+                                        shown = false;
+                                        leave = None;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             });

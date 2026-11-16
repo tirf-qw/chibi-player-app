@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schema/desktop-schema.json",
+  "identifier": "spotify-remote",
+  "description": "Окно со Spotify может только сообщать, играет ли музыка",
+  "windows": ["panel"],
+  "remote": { "urls": ["https://open.spotify.com/*"] },
+  "permissions": ["core:event:allow-emit"]
+}
