@@ -103,6 +103,7 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radiu
 .ib{background:none;border:0;padding:6px;border-radius:50%;color:var(--muted);cursor:pointer;display:grid;place-items:center;position:relative;transition:color .15s,transform .15s}
 .ib:hover{color:#fff;transform:scale(1.1)}
 .ib.on{color:var(--green)}
+.diag{color:#6f6f6f;font-size:11px;text-align:center;padding:10px 0 4px;line-height:1.5}
 .hb:not(.on) svg,#heart:not(.on) svg{fill:none!important;stroke:currentColor;stroke-width:2}
 .tc{position:relative}
 .tc .hb{position:absolute;right:14px;top:86px;width:32px;height:32px;padding:0;background:rgba(0,0,0,.6);color:#fff;opacity:0;transition:opacity .15s}
@@ -221,13 +222,36 @@ async function spAccess(){
   }
   return t.a;
 }
-async function spApi(path,opt={}){
+async function spApi1(path,opt={}){
   const a=await spAccess();
   const r=await fetch('https://api.spotify.com/v1'+path,{method:opt.method||'GET',
     headers:Object.assign({Authorization:'Bearer '+a},opt.body?{'Content-Type':'application/json'}:{}),body:opt.body?JSON.stringify(opt.body):undefined});
   if(r.status===204||r.status===202)return null;
   if(!r.ok){const e=new Error('HTTP '+r.status);e.status=r.status;try{const j=JSON.parse(await r.text());e.detail=(j.error&&(j.error.message||j.error))||''}catch(_){}throw e}
   const txt=await r.text();return txt?JSON.parse(txt):null;
+}
+async function spApi(path,opt={}){
+  try{return await spApi1(path,opt)}
+  catch(e){
+    if(e.status===400&&!opt.method){                       // «слишком большой limit» -> пробуем 10, потом 5
+      const m=path.match(/([?&])limit=(\d+)/);
+      if(m&&+m[2]>10)return spApi(path.replace(/limit=\d+/,'limit=10'),opt);
+      if(m&&+m[2]>5)return spApi(path.replace(/limit=\d+/,'limit=5'),opt);
+    }
+    throw e;
+  }
+}
+/* список целиком: берём первую страницу и докачиваем остальные по offset (с тем лимитом, который разрешил Spotify) */
+async function spList(path,want){
+  const j=path.includes('?')?'&':'?';
+  const first=await spApi(path+j+'limit=50&offset=0');
+  let items=(first&&first.items)||[];
+  const lim=(first&&first.limit)||items.length||10;
+  const total=Math.min((first&&first.total)||0,want);
+  const offs=[];for(let o=lim;o<total&&offs.length<12;o+=lim)offs.push(o);
+  const rest=await Promise.allSettled(offs.map(o=>spApi(path+j+'limit='+lim+'&offset='+o)));
+  rest.forEach(r=>{if(r.status==='fulfilled'&&r.value&&r.value.items)items=items.concat(r.value.items)});
+  return items.slice(0,want);
 }
 function spInit(){
   if(spReady)return spReady;
@@ -295,7 +319,7 @@ const clean=a=>(a||[]).filter(x=>x&&x.id);
 const yr=a=>String(a.release_date||'').slice(0,4);
 const rdate=a=>(String(a.release_date||'')+'-01-01').slice(0,10);
 const memo=(()=>{const m=new Map();return(key,fn,ttl=300000)=>{const h=m.get(key);if(h&&Date.now()-h.t<ttl)return h.p;const p=fn();m.set(key,{t:Date.now(),p});p.catch(()=>m.delete(key));return p}})();
-const myPlaylists=()=>memo('myplaylists',()=>spApi('/me/playlists?limit=40').then(d=>clean(d.items)));
+const myPlaylists=()=>memo('myplaylists',()=>spList('/me/playlists',50).then(clean));
 const spPlCard=p=>pcard(spImg(p.images,0),p.name,(p.owner&&p.owner.display_name)||'Плейлист',()=>openSpPlaylist(p));
 const spAlbumCard=a=>pcard(spImg(a.images,0),a.name,(a.artists||[]).map(x=>x.name).join(', ')+(yr(a)?' · '+yr(a):''),()=>openSpAlbum(a));
 const spArtistCard=a=>{const b=pcard(spImg(a.images,1),a.name,'Исполнитель',()=>openSpArtist(a));b.classList.add('art');return b};
@@ -324,13 +348,13 @@ async function spPlayCtx(uri,name,startUri){
 async function openSpPlaylist(p){
   body.innerHTML=msg('Загрузка…');
   let list=[];
-  try{const d=await spApi('/playlists/'+p.id+'/items?limit=50');list=spTs((d.items||[]).map(x=>x&&(x.item||x.track||x)))}catch(e){}
+  try{const it=await spList('/playlists/'+p.id+'/items',100);list=spTs(it.map(x=>x&&(x.item||x.track||x)))}catch(e){}
   if(list.length)return openList(p.name,list,{sp:1,ctx:{get:async()=>'spotify:playlist:'+p.id,name:p.name}});
   setTab(tab);spPlayCtx('spotify:playlist:'+p.id,p.name);   // состав чужих плейлистов Spotify не отдаёт — играем целиком
 }
 async function openSpAlbum(a){
   body.innerHTML=msg('Загрузка…');
-  try{const d=await spApi('/albums/'+a.id+'/tracks?limit=50');openList(a.name,spTs((d.items||[]).map(t=>Object.assign({},t,{album:a}))),{sp:1,ctx:{get:async()=>'spotify:album:'+a.id,name:a.name}})}
+  try{const it=await spList('/albums/'+a.id+'/tracks',60);openList(a.name,spTs(it.map(t=>Object.assign({},t,{album:a}))),{sp:1,ctx:{get:async()=>'spotify:album:'+a.id,name:a.name}})}
   catch(e){body.innerHTML=msg('Не удалось открыть альбом.')}
 }
 async function openSpArtist(a){
@@ -341,8 +365,8 @@ async function openSpArtist(a){
   ph.innerHTML=`<div class="cv rd" style="background-image:url('${url(spImg(a.images,0))}')"></div><div><b>${esc(a.name)}</b><span>Исполнитель</span><button class="pill" id="pa">Слушать</button></div>`;
   body.appendChild(ph);$('#pa').onclick=()=>spPlayCtx('spotify:artist:'+a.id,a.name);
   const sec=secEl('Альбомы и синглы');body.appendChild(sec.s);
-  await runSec(sec,()=>memo('alb:'+a.id,()=>spApi('/artists/'+a.id+'/albums?include_groups=album,single&limit=30')).then(d=>{
-    const seen=new Set();return clean(d.items).filter(x=>{const k=x.name.toLowerCase();return !seen.has(k)&&seen.add(k)});
+  await runSec(sec,()=>memo('alb:'+a.id,()=>spList('/artists/'+a.id+'/albums?include_groups=album,single',40)).then(items=>{
+    const seen=new Set();return clean(items).filter(x=>{const k=x.name.toLowerCase();return !seen.has(k)&&seen.add(k)});
   }),arr=>sec.box.appendChild(pgrid(arr,spAlbumCard)));
 }
 const meId=()=>memo('me',()=>spApi('/me').then(d=>d.id),3600000);
@@ -383,8 +407,8 @@ async function spTracks(q,n){
 async function openSpLiked(){
   body.innerHTML=msg('Загрузка…');
   try{
-    const pages=await Promise.all([0,50,100].map(o=>spApi('/me/tracks?limit=50&offset='+o).catch(()=>({items:[]}))));
-    openList('Любимые треки',spTs([].concat(...pages.map(d=>(d.items||[]).map(x=>x.track)))),{sp:1,ctx:likedCtx});
+    const it=await spList('/me/tracks',150);
+    openList('Любимые треки',spTs(it.map(x=>x.track)),{sp:1,ctx:likedCtx});
   }catch(e){body.innerHTML=msg('Не удалось загрузить.')}
 }
 
@@ -406,7 +430,7 @@ async function homeSp(){
   const charts=secEl('Чарты Spotify',false,{hide:true});
   const pls=secEl('Мои плейлисты',false,{hide:true});
   [rec,mixes,rel,art,top,charts,pls].forEach(x=>lst.appendChild(x.s));
-  const taP=memo('topartists',()=>spApi('/me/top/artists?limit=20&time_range=medium_term').then(d=>clean(d.items)));
+  const taP=memo('topartists',()=>spList('/me/top/artists?time_range=medium_term',20).then(clean));
   await Promise.all([
     runSec(rec,()=>memo('recent',async()=>{const seen=new Set();
       return spTs(((await spApi('/me/player/recently-played?limit=50')).items||[]).map(x=>x.track)).filter(t=>!seen.has(t.id)&&seen.add(t.id))}),l=>hookSec(rec,l,true)),
@@ -427,7 +451,7 @@ async function homeSp(){
       return all.sort((p,q)=>rdate(q).localeCompare(rdate(p))).slice(0,16);
     }),arr=>rel.box.appendChild(shelf(arr,spAlbumCard))),
     runSec(art,()=>taP.then(a=>a.slice(0,15)),arr=>art.box.appendChild(shelf(arr,spArtistCard))),
-    runSec(top,()=>memo('toptracks',()=>spApi('/me/top/tracks?limit=30&time_range=medium_term').then(d=>spTs(d.items))),l=>hookSec(top,l,false)),
+    runSec(top,()=>memo('toptracks',()=>spList('/me/top/tracks?time_range=medium_term',30).then(spTs)),l=>hookSec(top,l,false)),
     runSec(charts,()=>memo('charts',async()=>{
       const qs=['Top 50 Russia','Top 50 Ukraine','Top 50 Global','Today’s Top Hits'];
       const rs=await Promise.allSettled(qs.map(q=>spApi('/search?type=playlist&limit=5&q='+enc(q))));
@@ -437,12 +461,19 @@ async function homeSp(){
     }),arr=>charts.box.appendChild(shelf(arr,spPlCard))),
     runSec(pls,()=>myPlaylists(),arr=>pls.box.appendChild(shelf(arr,spPlCard)))
   ]);
+  if(!(rec.count||top.count||art.count)){               // нет истории прослушивания: показываем популярные новинки, чтобы лента не была пустой
+    const fb=secEl('Популярные новинки',true,{hide:true});lst.insertBefore(fb.s,lst.firstChild);
+    await runSec(fb,()=>memo('fallback',()=>spTracks('year:2025-2026',20)),l=>hookSec(fb,l,true));
+  }
   const bad=[rec,mixes,rel,art,top,charts,pls].filter(x=>x.failed);
   if(bad.length>=3){                                   // почти всё упало: объясняем причину вместо пустой ленты
     const e=bad[0].failed,st=e&&e.status;
     lst.innerHTML=msg('Не получилось загрузить ленту'+(st?' (код '+st+')':'')+'.'+(e&&e.detail?'<br><small>Spotify пишет: '+esc(String(e.detail))+'</small>':'')+'<br>'+
       (st===401||st===403?'Зайди в Настройки → «Войти заново» и разреши все пункты.':'Проверь интернет и попробуй ещё раз.'))+'<div style="text-align:center"><button class="pill" id="rt">Обновить</button></div>';
     $('#rt').onclick=()=>home();
+  }else{
+    const c=x=>x.failed?'ошибка '+(x.failed.status||''):(x.count||0);
+    lst.insertAdjacentHTML('beforeend','<div class="diag">Загружено: недавние '+c(rec)+' · топ-треки '+c(top)+' · исполнители '+c(art)+' · новые релизы '+c(rel)+' · подборки '+c(mixes)+' · плейлисты '+c(pls)+'</div>');
   }
 }
 
@@ -579,7 +610,7 @@ function secEl(title,withPlay,opts){
 async function runSec(sec,loader,render){
   const none=()=>{if(sec.hide)sec.s.remove();else sec.box.innerHTML=msg(sec.empty||'Пока пусто.')};
   try{
-    const data=await loader();sec.box.innerHTML='';
+    const data=await loader();sec.box.innerHTML='';sec.count=data?data.length:0;
     if(!data||!data.length){none();return}
     render(data);
   }catch(e){sec.failed=e;sec.box.innerHTML=msg('Не загрузилось'+(e&&e.status?' (код '+e.status+')':'')+'.')}
@@ -615,8 +646,8 @@ async function lib(){
         if(!a.length)ll.innerHTML=msg('Ты пока ни на кого не подписан.');
         a.forEach(x=>row(spImg(x.images,1),'',x.name,'Исполнитель',()=>openSpArtist(x),true));
       }else{
-        const d=await spApi('/me/albums?limit=40');if(tab!=='lib'||sub)return;ll.innerHTML='';
-        const a=clean((d.items||[]).map(x=>x.album));
+        const items=await spList('/me/albums',40);if(tab!=='lib'||sub)return;ll.innerHTML='';
+        const a=clean(items.map(x=>x.album));
         if(!a.length)ll.innerHTML=msg('Сохранённых альбомов пока нет.');
         a.forEach(x=>row(spImg(x.images,1),'',x.name,'Альбом · '+(x.artists||[]).map(y=>y.name).join(', '),()=>openSpAlbum(x)));
       }
@@ -634,7 +665,7 @@ function settings(){
   <label>Громкость <span id="vv">${vol}%</span></label><input type="range" id="vol" min="0" max="100" value="${vol}">
   <label>Картинка головы</label><div class="rw"><button class="pill g" id="up">Загрузить свою</button><button class="pill g" id="rs">Вернуть стандартную</button></div>
   ${APP?'<label>Приложение</label><div class="rw"><button class="pill g" id="quit">Закрыть плеер</button></div>':''}
-  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 17.11, v3 (сердечко + лента)</p></div>`;
+  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 17.11, v4 (лимиты Spotify)</p></div>`;
   if($('#quit'))$('#quit').onclick=()=>inv('quit');
   $('#spc').onchange=e=>jset('sp_cid',e.target.value.trim());
   $('#spl').onclick=()=>{jset('sp_cid',$('#spc').value.trim());spLogin()};
