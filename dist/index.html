@@ -49,7 +49,8 @@ button{font:inherit;color:inherit}
 .m b{display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .m span{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
 .row .d{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;min-width:32px;text-align:right}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.grid .tc{min-width:0}
 .sec{margin-bottom:18px}
 .sec .h{margin-top:0}
 .shelf{display:flex;gap:6px;overflow-x:auto;margin:0 -12px;padding:0 8px 4px;scrollbar-width:none}
@@ -364,10 +365,17 @@ async function openSpArtist(a){
   const ph=document.createElement('div');ph.className='ph';
   ph.innerHTML=`<div class="cv rd" style="background-image:url('${url(spImg(a.images,0))}')"></div><div><b>${esc(a.name)}</b><span>Исполнитель</span><button class="pill" id="pa">Слушать</button></div>`;
   body.appendChild(ph);$('#pa').onclick=()=>spPlayCtx('spotify:artist:'+a.id,a.name);
-  const sec=secEl('Альбомы и синглы');body.appendChild(sec.s);
-  await runSec(sec,()=>memo('alb:'+a.id,()=>spList('/artists/'+a.id+'/albums?include_groups=album,single',40)).then(items=>{
-    const seen=new Set();return clean(items).filter(x=>{const k=x.name.toLowerCase();return !seen.has(k)&&seen.add(k)});
-  }),arr=>sec.box.appendChild(pgrid(arr,spAlbumCard)));
+  const trk=secEl('Популярные треки',false,{empty:'Треки не нашлись.'}),alb=secEl('Альбомы и синглы',false,{hide:true});
+  body.appendChild(trk.s);body.appendChild(alb.s);
+  await Promise.all([
+    runSec(trk,()=>memo('atr:'+a.id,async()=>{
+      const l=await spTracks('artist:"'+a.name+'"',30),n=a.name.toLowerCase(),f=l.filter(t=>t.artist.toLowerCase().includes(n));
+      return f.length>=3?f:l;
+    }),l=>trk.box.appendChild(rows(l))),
+    runSec(alb,()=>memo('alb:'+a.id,()=>spList('/artists/'+a.id+'/albums?include_groups=album,single',40)).then(items=>{
+      const seen=new Set();return clean(items).filter(x=>{const k=x.name.toLowerCase();return !seen.has(k)&&seen.add(k)});
+    }),arr=>alb.box.appendChild(shelf(arr,spAlbumCard)))
+  ]);
 }
 const meId=()=>memo('me',()=>spApi('/me').then(d=>d.id),3600000);
 const likedCtx={get:async()=>'spotify:user:'+await meId()+':collection',name:'Любимые треки'};
@@ -665,7 +673,7 @@ function settings(){
   <label>Громкость <span id="vv">${vol}%</span></label><input type="range" id="vol" min="0" max="100" value="${vol}">
   <label>Картинка головы</label><div class="rw"><button class="pill g" id="up">Загрузить свою</button><button class="pill g" id="rs">Вернуть стандартную</button></div>
   ${APP?'<label>Приложение</label><div class="rw"><button class="pill g" id="quit">Закрыть плеер</button></div>':''}
-  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 17.11, v4 (лимиты Spotify)</p></div>`;
+  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 17.11, v5 (страница исполнителя)</p></div>`;
   if($('#quit'))$('#quit').onclick=()=>inv('quit');
   $('#spc').onchange=e=>jset('sp_cid',e.target.value.trim());
   $('#spl').onclick=()=>{jset('sp_cid',$('#spc').value.trim());spLogin()};
