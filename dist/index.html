@@ -103,6 +103,10 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radiu
 .ib{background:none;border:0;padding:6px;border-radius:50%;color:var(--muted);cursor:pointer;display:grid;place-items:center;position:relative;transition:color .15s,transform .15s}
 .ib:hover{color:#fff;transform:scale(1.1)}
 .ib.on{color:var(--green)}
+.hb:not(.on) svg,#heart:not(.on) svg{fill:none!important;stroke:currentColor;stroke-width:2}
+.tc{position:relative}
+.tc .hb{position:absolute;right:14px;top:86px;width:32px;height:32px;padding:0;background:rgba(0,0,0,.6);color:#fff;opacity:0;transition:opacity .15s}
+.tc:hover .hb,.tc .hb.on,.tc:focus-within .hb{opacity:1}
 .ib svg{width:20px;height:20px;fill:currentColor}
 #play{width:40px;height:40px;background:#fff;color:#000}
 #play:hover{background:#fff;color:#000;transform:scale(1.07)}
@@ -222,7 +226,7 @@ async function spApi(path,opt={}){
   const r=await fetch('https://api.spotify.com/v1'+path,{method:opt.method||'GET',
     headers:Object.assign({Authorization:'Bearer '+a},opt.body?{'Content-Type':'application/json'}:{}),body:opt.body?JSON.stringify(opt.body):undefined});
   if(r.status===204||r.status===202)return null;
-  if(!r.ok){const e=new Error('HTTP '+r.status);e.status=r.status;throw e}
+  if(!r.ok){const e=new Error('HTTP '+r.status);e.status=r.status;try{const j=JSON.parse(await r.text());e.detail=(j.error&&(j.error.message||j.error))||''}catch(_){}throw e}
   const txt=await r.text();return txt?JSON.parse(txt):null;
 }
 function spInit(){
@@ -362,11 +366,14 @@ function hookSec(sec,list,first){
   if(first)homeTracks=list;
   if(sec.btn){sec.btn.style.visibility='';sec.btn.onclick=()=>list.length&&playList(list,0)}
   sec.box.appendChild(shelf(list,trackCard(list)));
+  syncLikes(list);
 }
 function shelf(items,card){const d=document.createElement('div');d.className='shelf';items.forEach((it,i)=>d.appendChild(card(it,i)));return d}
-const trackCard=list=>(t,i)=>{const b=document.createElement('button');b.className='tc';b.dataset.id=t.id;
-  b.innerHTML=`<div class="cv" style="background-image:url('${url(t.big||t.art)}')"></div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span>`;
-  b.onclick=()=>playList(list,i);return b};
+const trackCard=list=>(t,i)=>{const b=document.createElement('div');b.className='tc';b.tabIndex=0;b.setAttribute('role','button');b.dataset.id=t.id;
+  b.innerHTML=`<div class="cv" style="background-image:url('${url(t.big||t.art)}')"></div><b>${esc(t.title)}</b><span>${esc(t.artist)}</span><button class="ib hb" aria-label="В любимые">${HEART}</button>`;
+  b.onclick=()=>playList(list,i);b.onkeydown=e=>{if(e.key==='Enter')playList(list,i)};
+  const hb=b.querySelector('.hb');hb.onclick=e=>{e.stopPropagation();toggleFav(t)};hb.classList.toggle('on',isFav(t));
+  return b};
 async function spTracks(q,n){
   const pages=await Promise.allSettled(Array.from({length:Math.ceil(n/10)},(_,i)=>spApi('/search?type=track&limit=10&offset='+i*10+'&q='+enc(q))));
   if(pages.every(p=>p.status==='rejected'))throw new Error('fail');
@@ -430,6 +437,13 @@ async function homeSp(){
     }),arr=>charts.box.appendChild(shelf(arr,spPlCard))),
     runSec(pls,()=>myPlaylists(),arr=>pls.box.appendChild(shelf(arr,spPlCard)))
   ]);
+  const bad=[rec,mixes,rel,art,top,charts,pls].filter(x=>x.failed);
+  if(bad.length>=3){                                   // почти всё упало: объясняем причину вместо пустой ленты
+    const e=bad[0].failed,st=e&&e.status;
+    lst.innerHTML=msg('Не получилось загрузить ленту'+(st?' (код '+st+')':'')+'.'+(e&&e.detail?'<br><small>Spotify пишет: '+esc(String(e.detail))+'</small>':'')+'<br>'+
+      (st===401||st===403?'Зайди в Настройки → «Войти заново» и разреши все пункты.':'Проверь интернет и попробуй ещё раз.'))+'<div style="text-align:center"><button class="pill" id="rt">Обновить</button></div>';
+    $('#rt').onclick=()=>home();
+  }
 }
 
 const BROWSE=[['Русский рэп','#e13300','русский рэп'],['Русский поп','#8d67ab','русский поп'],['Русский рок','#477d95','русский рок'],['Шансон','#7d4b32','шансон'],
@@ -517,7 +531,7 @@ seek.onchange=()=>{const d=curDur();if(d&&spPlayer)spPlayer.seek(seek.value/1000
 const likeMap=new Map();
 const isFav=t=>likeMap.get(t.id)===true;
 function paintHearts(){
-  document.querySelectorAll('.row').forEach(r=>{const b=r.querySelector('.hb');if(b)b.classList.toggle('on',likeMap.get(r.dataset.id)===true)});
+  document.querySelectorAll('[data-id]').forEach(r=>{const b=r.querySelector('.hb');if(b)b.classList.toggle('on',likeMap.get(r.dataset.id)===true)});
   const t=Q[qi];if(t)$('#heart').classList.toggle('on',isFav(t));
 }
 async function syncLikes(list){
@@ -533,6 +547,7 @@ async function toggleFav(t){
   try{await spApi('/me/library?uris='+enc(t.uri),{method:was?'DELETE':'PUT'});toast(was?'Убрано из любимых':'Добавлено в любимые')}
   catch(e){likeMap.set(t.id,was);paintHearts();toast('Не получилось. Войди в Spotify заново в Настройках')}
 }
+$('#heart').innerHTML=HEART;
 $('#heart').onclick=()=>{const t=Q[qi];if(t)toggleFav(t)};
 
 /* ---------- views ---------- */
@@ -567,7 +582,7 @@ async function runSec(sec,loader,render){
     const data=await loader();sec.box.innerHTML='';
     if(!data||!data.length){none();return}
     render(data);
-  }catch(e){if(sec.hide)sec.s.remove();else sec.box.innerHTML=msg('Не загрузилось.')}
+  }catch(e){sec.failed=e;sec.box.innerHTML=msg('Не загрузилось'+(e&&e.status?' (код '+e.status+')':'')+'.')}
 }
 let sT;
 function openList(title,list,o={}){
@@ -619,7 +634,7 @@ function settings(){
   <label>Громкость <span id="vv">${vol}%</span></label><input type="range" id="vol" min="0" max="100" value="${vol}">
   <label>Картинка головы</label><div class="rw"><button class="pill g" id="up">Загрузить свою</button><button class="pill g" id="rs">Вернуть стандартную</button></div>
   ${APP?'<label>Приложение</label><div class="rw"><button class="pill g" id="quit">Закрыть плеер</button></div>':''}
-  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p></div>`;
+  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 17.11, v3 (сердечко + лента)</p></div>`;
   if($('#quit'))$('#quit').onclick=()=>inv('quit');
   $('#spc').onchange=e=>jset('sp_cid',e.target.value.trim());
   $('#spl').onclick=()=>{jset('sp_cid',$('#spc').value.trim());spLogin()};
