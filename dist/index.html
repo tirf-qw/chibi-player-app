@@ -20,14 +20,29 @@ button{font:inherit;color:inherit}
 #wid::after{content:"";position:absolute;inset:-18px;border-radius:50%}
 #head{position:absolute;inset:0;display:grid;place-items:center;cursor:grab;touch-action:none;z-index:2}
 #wid.dragging #head{cursor:grabbing}
-#headImg{width:118px;height:118px;object-fit:contain;pointer-events:none;user-select:none;
+#headImg{width:calc(var(--size)*.95);height:calc(var(--size)*.95);object-fit:contain;pointer-events:none;user-select:none;
   filter:drop-shadow(0 8px 12px rgba(0,0,0,.6));animation:spin 6s linear infinite;animation-play-state:paused;transition:width .3s,height .3s}
 #wid.playing #headImg{animation-play-state:running}
-#wid.open #headImg{width:126px;height:126px}
+#wid.open #headImg{width:calc(var(--size)*1.016);height:calc(var(--size)*1.016)}
+/* вид «диск»: виниловая пластинка с обложкой песни в центре */
+#disc{display:none;position:relative;width:calc(var(--size)*.95);height:calc(var(--size)*.95);border-radius:50%;pointer-events:none;
+  background:repeating-radial-gradient(circle at 50% 50%,#0d0d0d 0 2px,#1c1c1c 2px 3px);
+  box-shadow:0 8px 14px rgba(0,0,0,.6),inset 0 0 0 2px #2b2b2b;
+  animation:spin 6s linear infinite;animation-play-state:paused;transition:width .3s,height .3s}
+#disc::before{content:"";position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(from 15deg,transparent 0 18%,rgba(255,255,255,.14) 24%,transparent 30% 68%,rgba(255,255,255,.14) 74%,transparent 80%)}
+#discCover{position:absolute;left:50%;top:50%;width:46%;height:46%;transform:translate(-50%,-50%);border-radius:50%;
+  background:#1ed760 center/cover no-repeat;box-shadow:0 0 0 2px #050505}
+#disc::after{content:"";position:absolute;left:50%;top:50%;width:9px;height:9px;transform:translate(-50%,-50%);border-radius:50%;
+  background:#0a0a0a;box-shadow:0 0 0 1.5px #3a3a3a}
+#wid[data-skin="disc"] #headImg{display:none}
+#wid[data-skin="disc"] #disc{display:block}
+#wid.playing #disc{animation-play-state:running}
+#wid.open #disc{width:calc(var(--size)*1.016);height:calc(var(--size)*1.016)}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* panel */
-#panel{position:absolute;top:0;width:min(420px,calc(100vw - 24px));height:min(600px,calc(100vh - 16px));display:flex;flex-direction:column;
+#panel{position:absolute;top:0;width:min(calc(420px*var(--ps,1)),calc(100vw - 24px));height:min(calc(600px*var(--ps,1)),calc(100vh - 16px));display:flex;flex-direction:column;
   background:#000;border:1px solid #242424;border-radius:16px;box-shadow:0 28px 70px rgba(0,0,0,.75);z-index:1;overflow:hidden;
   opacity:0;transform:scale(.35);pointer-events:none;visibility:hidden;transition:opacity .28s,transform .4s cubic-bezier(.2,.9,.25,1.12),visibility 0s linear .4s}
 #wid.open #panel{opacity:1;transform:scale(1);pointer-events:auto;visibility:visible;transition-delay:0s,0s,0s}
@@ -85,6 +100,7 @@ input[type=text]:focus{outline:2px solid #fff;outline-offset:0}
 #q:focus{outline:3px solid var(--green)}
 .set label{display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin:16px 0 8px}
 .set p{color:var(--muted);font-size:12px;line-height:1.55;margin:14px 0 0}
+.set input[type=range]{width:100%;display:block;margin:2px 0 6px}
 .set .rw{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
 
 /* now playing bar */
@@ -131,7 +147,7 @@ input[type=range]::-moz-range-thumb{width:12px;height:12px;border:0;border-radiu
 <div class="hint">Нажми на голову, чтобы включить музыку.<br>Наведи курсор — откроется плеер. Голову можно перетаскивать мышкой.</div>
 
 <div id="wid">
-  <div id="head" title="Клик: играть / пауза"><img id="headImg" alt="Chibi"></div>
+  <div id="head" title="Клик: играть / пауза"><img id="headImg" alt="Chibi"><div id="disc"><div id="discCover"></div></div></div>
   <div id="panel" role="region" aria-label="Мини-плеер">
     <div id="body"></div>
     <div id="toast"></div>
@@ -167,7 +183,8 @@ if(APP)document.documentElement.classList.add('app');
 const inv=(c,a)=>window.__TAURI_INTERNALS__.invoke(c,a);
 const FALLBACK_HEAD='data:image/svg+xml;utf8,'+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><circle cx='60' cy='62' r='44' fill='#ffd9b8'/><path d='M14 62a46 46 0 0 1 92 0' fill='none' stroke='#1ed760' stroke-width='9'/><rect x='6' y='56' width='16' height='30' rx='8' fill='#1ed760'/><rect x='98' y='56' width='16' height='30' rx='8' fill='#1ed760'/><circle cx='45' cy='64' r='5' fill='#222'/><circle cx='75' cy='64' r='5' fill='#222'/><path d='M48 82q12 10 24 0' fill='none' stroke='#222' stroke-width='4' stroke-linecap='round'/></svg>");
 const DEF_HEAD=DEFAULT_HEAD.indexOf('__HEAD__')===0?FALLBACK_HEAD:DEFAULT_HEAD;
-const $=s=>document.querySelector(s), SIZE=124;
+const $=s=>document.querySelector(s);
+const BASE=124;let SIZE=BASE;          // реальный размер задаётся в setScale() из настроек
 const HEART='<svg viewBox="0 0 24 24" style="width:18px;height:18px;fill:currentColor"><path d="M12 21s-7-4.4-9.3-9A5.3 5.3 0 0 1 12 6a5.3 5.3 0 0 1 9.3 6c-2.3 4.6-9.3 9-9.3 9z"/></svg>';
 const PLAY='<svg viewBox="0 0 24 24" style="width:22px;height:22px"><path d="M8 5v14l11-7z"/></svg>',PAUSE='<svg viewBox="0 0 24 24" style="width:22px;height:22px"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
 const fmt=ms=>{const s=Math.max(0,ms/1000|0);return (s/60|0)+':'+String(s%60).padStart(2,'0')};
@@ -521,6 +538,7 @@ let Q=[],qi=-1,shuffle=false,repeat=0,errs=0,playing=false;
 function show(t){
   $('#title').textContent=t.title;$('#artist').textContent=t.artist;
   const c=$('#cover');c.style.backgroundImage=t.big||t.art?`url('${url(t.big||t.art)}')`:'';$('#coverChibi').style.display=t.big||t.art?'none':'';
+  $('#discCover').style.backgroundImage=t.big||t.art?`url('${url(t.big||t.art)}')`:'';
   $('#heart').classList.toggle('on',isFav(t));syncLikes([t]);markCur();
 }
 function markCur(){const id=Q[qi]&&Q[qi].id;document.querySelectorAll('.row').forEach(r=>r.classList.toggle('cur',r.dataset.id===id))}
@@ -663,6 +681,16 @@ async function lib(){
   };
   paintC();load();
 }
+function applySkin(){$('#wid').dataset.skin=jget('skin','head')}
+/* размеры значка (голова/диск) и панели из настроек */
+function setScale(){
+  SIZE=Math.round(BASE*jget('sizePct',80)/100);
+  const st=document.documentElement.style;
+  st.setProperty('--size',SIZE+'px');st.setProperty('--ps',jget('panelPct',90)/100);
+  x=clampX(x);y=clampY(y);
+  if($('#wid').classList.contains('open'))place();
+  report();kick();
+}
 function settings(){
   const vol=Math.round(jget('vol',.8)*100);
   body.innerHTML=`<div class="set"><label>Spotify <span>${spTok()?'✓ подключён':'не подключён'}</span></label>
@@ -671,15 +699,22 @@ function settings(){
   <p>Redirect URI для приложения Spotify (скопируй точно): <b style="color:#fff;word-break:break-all">${esc(spRedirect())}</b></p>
   ${spProblem()?'<div class="note" style="margin-top:10px"><b>Важно:</b> '+esc(spProblem())+'</div>':''}
   <label>Громкость <span id="vv">${vol}%</span></label><input type="range" id="vol" min="0" max="100" value="${vol}">
+  <label>Вид плеера</label><div class="rw"><button class="pill ${jget('skin','head')==='head'?'':'g'}" id="skH">Голова</button><button class="pill ${jget('skin','head')==='disc'?'':'g'}" id="skD">Диск с обложкой</button></div>
+  <label>Размер значка <span id="szv">${jget('sizePct',80)}%</span></label><input type="range" id="sz" min="50" max="130" value="${jget('sizePct',80)}">
+  <label>Размер панели <span id="psv">${jget('panelPct',90)}%</span></label><input type="range" id="ps" min="70" max="110" value="${jget('panelPct',90)}">
   <label>Картинка головы</label><div class="rw"><button class="pill g" id="up">Загрузить свою</button><button class="pill g" id="rs">Вернуть стандартную</button></div>
   ${APP?'<label>Приложение</label><div class="rw"><button class="pill g" id="quit">Закрыть плеер</button></div>':''}
-  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 17.11, v5 (страница исполнителя)</p></div>`;
+  <p>Музыка идёт только из Spotify, нужен Premium (студенческий подходит). Подборки Spotify (Top 50, Daily Mix) запускаются целиком, но список треков внутри них Spotify приложениям не показывает. Сердечко добавляет трек в «Любимые» в твоём Spotify.</p><p style="opacity:.55">Сборка: 18.11, v8 (ползунки)</p></div>`;
+  $('#skH').onclick=()=>{jset('skin','head');applySkin();settings()};
+  $('#skD').onclick=()=>{jset('skin','disc');applySkin();settings()};
   if($('#quit'))$('#quit').onclick=()=>inv('quit');
   $('#spc').onchange=e=>jset('sp_cid',e.target.value.trim());
   $('#spl').onclick=()=>{jset('sp_cid',$('#spc').value.trim());spLogin()};
   if($('#splo'))$('#splo').onclick=()=>{localStorage.removeItem('sp_tok');try{spPlayer&&spPlayer.disconnect()}catch(_){}spPlayer=null;spReady=null;spDev='';spSt=null;playing=false;sync();toast('Вышел из Spotify');settings()};
-  const rg=(el,f)=>{const u=()=>{el.style.setProperty('--p',el.value/el.max*100+'%')};u();el.oninput=()=>{u();f(el.value)}};
+  const rg=(el,f)=>{const u=()=>{el.style.setProperty('--p',(el.value-(+el.min||0))/((+el.max)-(+el.min||0))*100+'%')};u();el.oninput=()=>{u();f(el.value)}};
   rg($('#vol'),v=>{if(spPlayer)spPlayer.setVolume(v/100);$('#vv').textContent=v+'%';jset('vol',v/100)});
+  rg($('#sz'),v=>{jset('sizePct',+v);$('#szv').textContent=v+'%';setScale()});
+  rg($('#ps'),v=>{jset('panelPct',+v);$('#psv').textContent=v+'%';setScale()});
   $('#up').onclick=()=>$('#hf').click();$('#rs').onclick=()=>{localStorage.removeItem('chibi_head');setHead(DEF_HEAD)};
 }
 $('#hf').onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{setHead(r.result);try{localStorage.setItem('chibi_head',r.result)}catch(_){}};r.readAsDataURL(f)};
@@ -791,7 +826,7 @@ async function spFinish(code,er){
   const p=new URLSearchParams(location.search),code=p.get('code'),er=p.get('error');
   if(code||er){history.replaceState(null,'',location.pathname);spFinish(code,er)}
 })();
-sync();kick();report();
+applySkin();setScale();sync();kick();report();
 </script>
 </body>
 </html>
